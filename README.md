@@ -1,8 +1,3 @@
-Here's a README.md for your ESP32 Air Mouse project:
-
-
----
-
 ESP32 Air Mouse with MPU6050 & Bluetooth HID
 
 🚀 Turn your ESP32 into a Wireless Air Mouse!
