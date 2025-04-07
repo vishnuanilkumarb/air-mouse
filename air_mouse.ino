@@ -14,17 +14,17 @@ int deadZone = 3;
 const int buttonLeft = 2;
 const int buttonRight = 4;
 const int buttonSen = 5;
-const int buttonPause = 18; // New pause button
+const int buttonPause = 18;
 
 bool lastButtonLeftState = HIGH;
 bool lastButtonRightState = HIGH;
-bool lastButtonSensitivityState = HIGH;
 bool lastPauseButtonState = HIGH;
-unsigned long lastPausePressTime = 0;
-bool xFlipInverted = true; 
+bool lastButtonSensitivityState = HIGH;
 
+unsigned long lastPausePressTime = 0;
 bool isPaused = false;
 unsigned long pauseUntil = 0;
+bool xFlipInverted = true;
 
 BleMouse bleMouse("Air Mouse");
 const uint8_t IMUAddress = 0x68;
@@ -96,35 +96,20 @@ void handleMouseClick(int button, bool &lastState, int mouseButton) {
   lastState = currentState;
 }
 
-void handleSensitivityAdjustment() {
-  bool currentState = digitalRead(buttonSen);
-  if (currentState == LOW && lastButtonSensitivityState == HIGH) {
-    Sensitivity += 50;
-    if (Sensitivity > maxSen) {
-      Sensitivity = minSen;
-    }
-    Serial.print("New Sensitivity: ");
-    Serial.println(Sensitivity);
-    delay(200); // debounce
-  }
-  lastButtonSensitivityState = currentState;
-}
-
 void handlePauseButton() {
   bool currentState = digitalRead(buttonPause);
   unsigned long currentTime = millis();
 
   if (currentState == LOW && lastPauseButtonState == HIGH) {
     if (currentTime - lastPausePressTime < 500) {
-      // Double press detected → toggle X flip
       xFlipInverted = !xFlipInverted;
       Serial.print("X-axis flip toggled. Now: ");
       Serial.println(xFlipInverted ? "INVERTED" : "NORMAL");
     } else {
-      // Single press → pause mouse for 2 seconds
       isPaused = true;
       pauseUntil = currentTime + 2000;
-      Serial.println("Mouse paused for 2 seconds...");
+      calibrateGyro(); // Reset gyro on pause
+      Serial.println("Mouse paused for 2 seconds and gyro reset...");
     }
 
     lastPausePressTime = currentTime;
@@ -138,6 +123,63 @@ void handlePauseButton() {
   lastPauseButtonState = currentState;
 }
 
+void handleSensitivityButton() {
+  static unsigned long lastPressTime = 0;
+  static unsigned long buttonPressStart = 0;
+  static bool isPressed = false;
+  static bool longPressHandled = false;
+
+  bool currentState = digitalRead(buttonSen);
+  unsigned long currentTime = millis();
+
+  if (currentState == LOW && lastButtonSensitivityState == HIGH) {
+    buttonPressStart = currentTime;
+
+    if (currentTime - lastPressTime < 400) {
+      // Double press: Middle click
+      if (bleMouse.isConnected()) {
+        bleMouse.click(MOUSE_MIDDLE);
+        Serial.println("Middle click via double press.");
+      }
+    }
+
+    lastPressTime = currentTime;
+    isPressed = true;
+    longPressHandled = false;
+    delay(50);
+  }
+
+  if (isPressed && currentState == LOW && !longPressHandled) {
+    if (currentTime - buttonPressStart > 600) {
+      // Long press → scroll mode
+      while (digitalRead(buttonSen) == LOW) {
+        i2cRead(0x3B, i2cData, 14);
+        int16_t rawZ = ((i2cData[12] << 8) | i2cData[13]) - gyroZ_offset;
+        rawZ = rawZ / (Sensitivity / 2);
+        if (abs(rawZ) > 1) {
+          if (bleMouse.isConnected()) {
+            bleMouse.move(0, 0, rawZ > 0 ? -1 : 1); // Scroll up/down
+            Serial.println(rawZ > 0 ? "Scroll up" : "Scroll down");
+            delay(150);
+          }
+        }
+      }
+      longPressHandled = true;
+    }
+  }
+
+  if (currentState == HIGH && lastButtonSensitivityState == LOW && !longPressHandled) {
+    Sensitivity += 50;
+    if (Sensitivity > maxSen) {
+      Sensitivity = minSen;
+    }
+    Serial.print("New Sensitivity: ");
+    Serial.println(Sensitivity);
+  }
+
+  lastButtonSensitivityState = currentState;
+}
+
 // ---------------------- Setup ----------------------
 void setup() {
   Wire.begin();
@@ -149,7 +191,6 @@ void setup() {
   pinMode(buttonSen, INPUT_PULLUP);
   pinMode(buttonPause, INPUT_PULLUP);
 
-  // Initialize MPU6050
   i2cData[0] = 7;
   i2cData[1] = 0x00;
   i2cData[3] = 0x00;
@@ -158,11 +199,8 @@ void setup() {
   while (i2cRead(0x75, i2cData, 1));
 
   delay(100);
-
-  // Perform Calibration
   calibrateGyro();
 
-  // Optional button action at startup
   if (digitalRead(buttonLeft) == LOW) bleMouse.click(MOUSE_LEFT);
   if (digitalRead(buttonRight) == LOW) bleMouse.click(MOUSE_RIGHT);
   if (digitalRead(buttonSen) == LOW) {
@@ -176,17 +214,15 @@ void setup() {
 
 // ---------------------- Loop ----------------------
 void loop() {
-  // Handle pause
   handlePauseButton();
 
-  // Read IMU if not paused
   if (!isPaused) {
     while (i2cRead(0x3B, i2cData, 14));
     gyroX = ((i2cData[8] << 8) | i2cData[9]) - gyroX_offset;
     gyroZ = ((i2cData[12] << 8) | i2cData[13]) - gyroZ_offset;
-    
+
     gyroX = gyroX / Sensitivity * (xFlipInverted ? -1 : 1);
-    gyroZ = gyroZ / Sensitivity * 1;
+    gyroZ = gyroZ / Sensitivity;
 
     if (abs(gyroX) < deadZone) gyroX = 0;
     if (abs(gyroZ) < deadZone) gyroZ = 0;
@@ -200,10 +236,9 @@ void loop() {
     }
   }
 
-  // Handle buttons
   handleMouseClick(buttonLeft, lastButtonLeftState, MOUSE_LEFT);
   handleMouseClick(buttonRight, lastButtonRightState, MOUSE_RIGHT);
-  handleSensitivityAdjustment();
+  handleSensitivityButton();
 
   delay(delayi);
 }

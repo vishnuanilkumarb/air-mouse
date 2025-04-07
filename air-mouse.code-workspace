@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "250406-020358-esp32doit-devkit-v1",
+			"path": "../../PlatformIO/Projects/250406-020358-esp32doit-devkit-v1"
+		}
+	],
+	"settings": {}
+}
